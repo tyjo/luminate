@@ -1,7 +1,7 @@
 # LUMINATE
 LUMINATE (longitudinal microbiome inference and zero detection) includes three programs for inference in microbiome datasets:
 
-* `estimate`: estimate relative abundances and posterior probabilities of sampling zeros.
+* `estimate`: estimate relative abundances and posterior probabilities of biological zeros.
 * `train`: estimate model parameters for compositional Lotka-Volterra (cLV).
 * `predict`: predict longitudinal trajectories from initial conditions.
 
