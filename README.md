@@ -46,7 +46,7 @@ This will produce one stacked bar plot per sequence of relative abundances over 
 
 Here is an example, using the first sequence in the C. diff dataset:
 
-![Example plot](./datasets/bucci2016mdsine/cdiff-counts-1.pdf)
+![Example plot](https://raw.githubusercontent.com/tyjo/luminate/datasets/bucci2016mdsine/cdiff-counts-1.pdf)
 
 
 ### Estimate
@@ -78,7 +78,7 @@ python main.py plot \
 
 ```
 
-![Estimated relative abundances](./datasets/bucci2016mdsine/cdiff-counts-est-1.pdf)
+![Estimated relative abundances](https://raw.githubusercontent.com/tyjo/luminate/datasets/bucci2016mdsine/cdiff-counts-est-1.pdf)
 
 
 
@@ -134,7 +134,7 @@ python main.py plot \
 
 ```
 
-![Estimated relative abundances](./datasets/bucci2016mdsine/cdiff-counts-est-pred-1.pdf)
+![Estimated relative abundances](https://raw.githubusercontent.com/tyjo/luminate/datasets/bucci2016mdsine/cdiff-counts-est-pred-1.pdf)
 
 
 To make a prediction from initial conditions, omit the `--one-step` flag:
