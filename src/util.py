@@ -156,7 +156,7 @@ def parse_event_table(filename, sep=",", has_header=True):
             row = np.array((e_idx, start_day, end_day, e_size))
             events[idx] = row
 
-        return events, event_to_int, seq_id
+        return events, event_to_int, seq_id, event_types
 
 
 def format_observations(otu_table,
@@ -181,6 +181,9 @@ def format_observations(otu_table,
         seq = seq[:,sort_by_day]
         days = np.array(seq[0], dtype=float)
 
+        if days.size <= 1:
+            print("\tWarning: observation {} has only 1 time point".format(s_id), file=sys.stderr)
+
         observations = []
         for day in days:
             idx = np.argwhere(days == day)
@@ -197,18 +200,24 @@ def format_observations(otu_table,
             events = event_table[np.array(event_seq_id) == s_id,:]
 
             for event in events:
-                event_idx = event[0]
+                event_idx = int(event[0])
                 start_day = event[1]
                 end_day = event[2]
                 event_size = event[3]
 
                 for day_idx, day in enumerate(days[:-1]):
-                    # day \in [start_day, end_day)
-                    if start_day <= day and day < end_day and end_day >= days[day_idx+1]:
-                        effects[day_idx] = event_size*(days[day_idx+1] - day)
-                    # day == end_day (include end point)
-                    elif day == end_day:
-                        effects[day_idx] = event_size
+                    # # day \in [start_day, end_day)
+                    # if start_day <= day and day < end_day and end_day >= days[day_idx+1]:
+                    #     effects[day_idx] = event_size*(days[day_idx+1] - day)
+                    # # day == end_day (include end point)
+                    # elif day == end_day:
+                    #     effects[day_idx] = event_size
+                    if day >= start_day and day <= end_day:
+                        effects[day_idx, event_idx] = event_size
+                    elif start_day >= day and end_day <= days[day_idx+1] and start_day < days[day_idx+1]:
+                        effects[day_idx, event_idx] = event_size
+
+                effects[-1,event_idx] = event_size if start_day == days[-1] else 0
 
         else:
             effects = np.zeros((len(days), 1))
@@ -234,17 +243,18 @@ def load_observations(otu_filename, event_filename = ""):
                                         has_rownames=True)
 
     if event_filename != "":
-        events, event_to_int, event_seq_id = parse_event_table(event_filename, sep=",")
+        events, event_to_int, event_seq_id, event_names = parse_event_table(event_filename, sep=",")
     else:
         events = None
         event_seq_id = None
         event_to_int = None
+        event_names = None
 
     # U list of length number of patients
     # U[i] is a matrix of t_pts by effects
     IDs, Y, U, T = format_observations(otu_table, otu_seq_id, events, event_seq_id, event_to_int)
     
-    return IDs, Y, U, T
+    return IDs, Y, U, T, event_names
 
 
 
