@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 python main.py plot \
-               datasets/bucci2016mdsine/cdiff-counts-pred.csv \
+               datasets/bucci2016mdsine/cdiff-counts.csv \
                -e datasets/bucci2016mdsine/cdiff-events.csv \
                -i datasets/bucci2016mdsine \
                -o datasets/bucci2016mdsine
