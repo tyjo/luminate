@@ -1,9 +1,8 @@
 import numpy as np
 import scipy.optimize
 import sys
-from scipy.misc import logsumexp
 from scipy.stats import norm, multinomial
-from scipy.special import gammaln, xlogy
+from scipy.special import gammaln, xlogy, logsumexp
 
 import time
 
@@ -106,7 +105,7 @@ class NoisyVMLDS:
     Dynamical System.
     """
 
-    def __init__(self, Y, U, T):
+    def __init__(self, Y, U, T, denom):
         """
         Parameters
         ----------
@@ -117,10 +116,17 @@ class NoisyVMLDS:
                  external perturbations.
             T  : A list of T_y by 1 dimensional numpy arrays giving
                  the times of each observation in a sequence y.
+            denom : denominator of the additive log-ratio transformation
         """
-        self.Y = Y
+        for t in T:
+            if t.size <= 1:
+                print("Error: sequence has 1 or fewer time points", file=sys.stderr)
+                exit(1)
+
+        self.Y = self.swap_last_taxon(Y, denom) # last taxon is denominator
         self.V = self.parse_perturbations(U)
         self.T = T
+        self.denom = denom
         self.obs_dim = Y[0].shape[1]
         self.latent_dim = self.obs_dim - 1
 
@@ -156,15 +162,15 @@ class NoisyVMLDS:
         # state space variance
         self.sigma2 = 0.2*np.eye(self.latent_dim)
         # perturbation variance
-        self.sigma2_p = np.eye(self.latent_dim)
+        self.sigma2_p = 0.2*np.eye(self.latent_dim)
         # observation variance
         self.gamma2 = np.ones(self.latent_dim)
         # transitions for zeros
         # p = 1e-3
         # self.A = np.zeros((self.obs_dim, 2, 2))
         # for i in range(self.obs_dim):
-        #     self.A[i] = np.array([ [1-p, p], [p, 1-p] ])
-        # self.A_init = (1-1e-4)*np.ones(self.obs_dim)
+        #     self.A[i] = np.array([ [p, 1-p], [1-p, p] ])
+        # self.A_init = (1-1e-3)*np.ones(self.obs_dim)
         self.A, self.A_init = self.initialize_A(Y)
 
         # variance of X, block precision and block covariance
@@ -179,15 +185,46 @@ class NoisyVMLDS:
         self.update_variance()
 
 
+    def swap_last_taxon(self, Y, denom):
+        Y_swapped = []
+        for y in Y:
+            y = np.copy(y)
+            tmp = np.copy(y[:,-1])
+            y[:,-1] = np.copy(y[:,denom])
+            y[:,denom] = tmp
+            Y_swapped.append(y)
+        return Y_swapped
 
-    def estimate_relative_abundances(self):
+
+    def get_relative_abundances(self, X=None):
         P = []
-        for x,w in zip(self.X, self.W):
-            x1 = np.hstack((x, np.ones((x.shape[0], 1))))
-            xw = x1 + np.log(w)
-            p = np.exp(xw - logsumexp(xw, axis=1, keepdims=True))
+        if X is None:
+            X = self.X
+
+        for x in X:
+            x1 = np.hstack((x, np.zeros((x.shape[0], 1))))
+            p = np.exp(x1 - logsumexp(x1, axis=1, keepdims=True))
+
+            # place in same order as original input
+            tmp = np.copy(p[:,-1])
+            p[:,-1] = np.copy(p[:,self.denom])
+            p[:,self.denom] = tmp
             P.append(p)
         return P
+
+
+    def get_posterior_nonzero_probs(self, W=None):
+        if W is None:
+            W = self.W
+
+        W_swapped = []
+        for w in self.W:
+            w = np.copy(w)
+            tmp = np.copy(w[:,-1])
+            w[:,-1] = np.copy(w[:,self.denom])
+            w[:,self.denom] = tmp
+            W_swapped.append(w)
+        return W_swapped
 
 
     def parse_perturbations(self, U):
@@ -419,9 +456,16 @@ class NoisyVMLDS:
             n = y.sum(axis=1)
             state_space = -0.5*compute_blk_inner_prod(z-x, multiply_across_axis(gamma_inv_AA, w[:,:lat_dim])) 
 
-            wl = w[:,lat_dim].reshape((w[:,lat_dim].size, 1))
-            obs = (y[:,:lat_dim]*w[:,:lat_dim]*z).sum() \
-                    - (n*np.log(w[:,lat_dim] + (w[:,:lat_dim]*np.exp(z + var_Z)).sum(axis=1))).sum()
+            #wl = w[:,lat_dim].reshape((w[:,lat_dim].size, 1))
+            np.seterr(divide="ignore") # log of 0 is handled appropriately here
+            p = np.hstack([np.log(w[:,:lat_dim]) + z + var_Z, np.expand_dims(np.log(w[:,lat_dim]),axis=1)])
+            np.seterr(divide="warn")
+            p = np.exp(p - logsumexp(p,axis=1,keepdims=True))
+            p /= p.sum(axis=1,keepdims=True)
+            obs = multinomial(y,n,p).sum()
+
+            # obs = (y[:,:lat_dim]*w[:,:lat_dim]*z).sum() \
+            #         - (n*np.log(w[:,lat_dim] + (w[:,:lat_dim]*np.exp(z + var_Z)).sum(axis=1))).sum()
             return -(state_space + obs)
 
 
@@ -432,13 +476,19 @@ class NoisyVMLDS:
             z = z.reshape(x.shape)
             n = y.sum(axis=1, keepdims=True)
             lat_dim = self.latent_dim
-            denom = w[:,lat_dim] + (w[:,:lat_dim]*np.exp(z + var_Z)).sum(axis=1)
+            #denom = w[:,lat_dim] + (w[:,:lat_dim]*np.exp(z + var_Z)).sum(axis=1)
+            #log_denom = np.log(denom)
             np.seterr(divide="ignore") # log of 0 is handled appropriately here
+            log_denom = np.hstack([np.log(w[:,:lat_dim]) + z + var_Z, np.expand_dims(np.log(w[:,lat_dim]),axis=1)])
+            log_denom = logsumexp(log_denom,axis=1)
             log_numer = np.log(n) + np.log(w[:,:lat_dim]) + z + var_Z
             np.seterr(divide="warn")
+
             blk_grad_z = -block_diag_multiply(multiply_across_axis(gamma_inv_AA, w[:,:lat_dim]), z-x) + \
                             y[:,:lat_dim]*w[:,:lat_dim] - \
-                            np.exp(log_numer.T - np.log(denom)).T
+                            np.exp(log_numer.T - log_denom).T
+                            #np.exp(log_numer.T - np.log(denom)).T
+
             assert np.all(np.isfinite(blk_grad_z)), str(z) + "\n"  + \
                                                      str(numer) + "\n" + str(denom)
             return -blk_grad_z
@@ -447,6 +497,7 @@ class NoisyVMLDS:
         def minimize(z, w, x, y, gamma_inv_AA, var_Z, max_iter=100, verbose=False):
             """Minimize using conjugate gradient.
             """
+            flipped = False
             prv = np.inf
             nxt = compute_obj(z, w, x, y, gamma_inv_AA, var_Z)
             grad_z = compute_grad(z, w, x, y, gamma_inv_AA, var_Z)
@@ -455,7 +506,8 @@ class NoisyVMLDS:
             c1 = 0.0001
             c2 = 0.1
             it = 0
-            while np.sqrt(np.square(grad_z).sum()) > 1:
+            #while np.sqrt(np.square(grad_z).sum()) > 1:
+            while np.abs(prv - nxt) > 1e-3:
                 if verbose:
                     print("it:", it, "obj:", nxt)
 
@@ -479,7 +531,7 @@ class NoisyVMLDS:
                 grad_z = compute_grad(z, w, x, y, gamma_inv_AA, var_Z)
                 b = (grad_z*grad_z).sum() / (prv_grad_z*prv_grad_z).sum()
                 p = -grad_z + b*p
-                it +=1
+                it += 1
 
                 if nxt > prv + 1e-2:
                     print("Warning: increasing objective in Z.\n" +
@@ -559,8 +611,9 @@ class NoisyVMLDS:
                 alpha_w0 = np.zeros(ntaxa)
                 alpha_w0[y[t] > 0] = -np.inf
                 alpha_w0[y[t] == 0] = np.log(A[:,1,0]*at0 + A[:,0,0]*(1-at0))[y[t] == 0] + multinomial(y0, n, p)[y[t] == 0]
-               
-                assert np.all(np.logical_or(np.isfinite(alpha_w0), np.isfinite(alpha_w1)) >= 1)
+
+                np.set_printoptions(threshold=np.inf)
+                assert np.all(np.logical_or(np.isfinite(alpha_w0), np.isfinite(alpha_w1)) >= 1), str(p[0]) + "\n" + str(y[t])
                 alpha[t] = np.exp(alpha_w1 - logsumexp(np.vstack([alpha_w0, alpha_w1]).T,axis=1))
                 assert np.all(alpha[t] >= 0) and np.all(alpha[t] <= 1), alpha[t]
 
@@ -773,28 +826,16 @@ class NoisyVMLDS:
 
                 if v[t] == 1:
                     tmp = (x[t] - x[t-1]) / np.sqrt(dt)
-                    # Mt1_p = Mt_p + (tmp - Mt_p)/(n_perturb+1)
-                    # St_p = St_p + np.outer(tmp - Mt_p, tmp - Mt1_p)
-                    # Mt_p = np.copy(Mt1_p)
-                    St_p = St_p + np.outer(tmp, tmp)
+                    St_p = St_p + tmp * tmp
                     n_perturb += 1
                 else:
                     tmp = (x[t] - x[t-1]) / np.sqrt(dt)
-                    # Mt1 = Mt + (tmp - Mt)/(n_normal+1)
-                    # St = St + np.outer(tmp - Mt, tmp - Mt1)
-                    # Mt = np.copy(Mt1)
                     St = St + np.outer(tmp, tmp)
                     n_normal += 1
 
         sigma2_0 /= len(self.X)
-        # sigma2 /= np.max((n_normal, 1))
-        # sigma2_p /= np.max((n_perturb, 1))
-
         sigma2 = St / np.max((n_normal, 1))
         sigma2_p = St_p / np.max((n_normal, 1))
-
-        # sigma2[sigma2 > 0] = np.clip(sigma2[sigma2 > 0], 1e-4, np.inf)
-        # sigma2[sigma2 < 0] = np.clip(sigma2[sigma2 < 0], -np.inf, -1e-4)
 
         # Numerical errors can cause the covariance matrix
         # to have nonpositive and nonreal eigenvalues and
@@ -804,16 +845,17 @@ class NoisyVMLDS:
         w,v = np.linalg.eig(sigma2)
         v = np.real(v)
         w = np.real(w)
-        #print(w)
-        #w[w<0] = 0
-        #assert np.all(w >= 0), str(w) + "\n" + str(w >= 0)
         w = np.clip(w, 1e-3, 5)
-        #print(w)
-        #print(np.max(w)/np.min(w))
-        #print(w)
-        #assert np.all(w >= 0), str(w) + "\n" + str(w >= 0)
         sigma2 = v.dot(np.diag(w)).dot(v.T)
         self.sigma2 = sigma2
+
+        if np.any(sigma2_p != 0):
+            # w,v = np.linalg.eig(sigma2_p)
+            # v = np.real(v)
+            # w = np.real(w)
+            # w = np.clip(w, 1e-3, 5)
+            sigma2_p = np.clip(sigma2, 1e-3, 5)
+            self.sigma2_p = sigma2_p*np.eye(self.latent_dim)
 
 
     def update_gamma(self):
@@ -828,18 +870,11 @@ class NoisyVMLDS:
             tpts = x.shape[0]
             for t in range(tpts):
                 tmp = np.sqrt(w[t,:lat_dim])*(z[t]-x[t])
-                #Mt1 = Mt + (tmp - Mt) / (total+1)
-                #St = St + (tmp - Mt)*(tmp - Mt1)
-                #Mt = np.copy(Mt)
                 St = St + tmp*tmp
                 total += 1
 
         gamma2 = St / (total)
-        #assert np.all(gamma2 > 0)
         gamma2 = np.clip(gamma2, 1e-3, 5)
-        #print(np.max(gamma2)/np.min(gamma2))
-        #print(gamma2)
-        #print()
         self.gamma2 = gamma2
 
 
@@ -874,7 +909,7 @@ class NoisyVMLDS:
         t_pts = times.shape[0]
 
         assert np.all(np.diag(s2_inv) > 0), np.diag(s2_inv)
-        assert np.all(np.diag(s2_p_inv) > 0)
+        assert np.all(np.diag(s2_p_inv) > 0), np.diag(s2_p_inv)
         assert np.all(np.diag(s2_0_inv) > 0)
 
         # Diagonal entries
