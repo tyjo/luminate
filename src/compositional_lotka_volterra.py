@@ -1,17 +1,20 @@
 import numpy as np
 import sys
-from scipy.misc import logsumexp
+from scipy.special import logsumexp
+from scipy.stats import linregress
+
+from src.find_stable_subset import find_stable_subset
 
 class CompositionalLotkaVolterra:
     """Inference for compositional Lotka-Volterra.
     """
 
-    def __init__(self, X=None, Y=None, T=None, U=None):
+    def __init__(self, P=None, T=None, U=None):
         """
         Parameters
         ----------
-            X : A list of T_x by D-1 dimensional numpy arrays of
-                estimated additive log-ratios.
+            P : A list of T_x by D dimensional numpy arrays of
+                estimated relative abundances.
             Y  : A list of T_y by D dimensional numpy arrays of
                  time-series observations. T_y denotes the number
                  of observations for sequence y.
@@ -20,10 +23,15 @@ class CompositionalLotkaVolterra:
             U : An optional list of T_x by P numpy arrays of external
                 perturbations for each x.
         """
-        self.X = X
-        self.Y = Y
+        self.P = P
         self.T = T
-        if U is None and X is not None:
+
+        if P is not None:
+            self.X, self.denom_ids = self.construct_log_ratios(P)
+        else:
+            self.X = None
+
+        if U is None and self.X is not None:
             self.U = [ np.zeros((x.shape[0], 1)) for x in X ]
         else:
             self.U = U
@@ -32,7 +40,7 @@ class CompositionalLotkaVolterra:
         self.A = None
         self.g = None
         self.B = None
-        self.Q_inv = np.eye(self.X[0].shape[1]) if X is not None else None
+        self.Q_inv = np.eye(self.P[0].shape[1]) if P is not None else None
 
         # Regularization parameters
         self.alpha = None
@@ -41,20 +49,52 @@ class CompositionalLotkaVolterra:
         self.r_B = None
 
 
+    def construct_log_ratios(self, P, denom_ids = None):
+        if denom_ids is None:
+            denom_ids = find_stable_subset(P)
+        X = []
+        for p in P:
+            x = np.zeros((p.shape[0], p.shape[1]))
+            for t in range(p.shape[0]):
+                pt = p[t]
+                denom1 = np.sum(pt[denom_ids])
+                denom2 = 1-denom1
+                denom = np.array([denom1 if i not in denom_ids else denom2 for i in range(p.shape[1])]).flatten()
+                xt = np.log(pt) - np.log(denom)
+                x[t] = xt
+            X.append(x)
+        return X, denom_ids
+
+
+    def get_regularizers(self):
+        return self.alpha, self.r_A, self.r_g, self.r_B
+
+
+    def set_regularizers(self, alpha, r_A, r_g, r_B):
+        self.alpha = alpha
+        self.r_A = r_A
+        self.r_g = r_g
+        self.r_B = r_B
+
+
     def train(self, verbose=False):
         """Estimate regularization parameters and CLV model parameters.
         """
-        if verbose:
-            print("\tEstimating regularizers...", file=sys.stderr)
-        self.alpha, self.r_A, self.r_g, self.r_B = estimate_elastic_net_regularizers_cv(self.X, self.Y, self.U, self.T, verbose=verbose)
+        if self.alpha is None or self.r_A is None or self.r_g is None or self.r_B is None:
+            if verbose:
+                print("Estimating regularizers...")
+            self.alpha, self.r_A, self.r_g, self.r_B = estimate_elastic_net_regularizers_cv(self.X, self.P, self.U, self.T, self.denom_ids, verbose=verbose)
         
         if verbose:
-            print("\tEstimating model parameters...", file=sys.stderr)
-        self.A, self.g, self.B = elastic_net_clv(self.X, self.U, self.T, self.Q_inv, self.alpha, self.r_A, self.r_g, self.r_B)
+            print("Estimating model parameters...")
+        self.A, self.g, self.B = elastic_net_clv(self.X, self.P, self.U, self.T, self.Q_inv, self.alpha, self.r_A, self.r_g, self.r_B)
+        
+        if verbose:
+            print()
 
 
-    def predict(self, y0, times, u = None):
-        """Predict relative abundances from initial conditions.
+    def predict(self, p, times, u = None):
+        """Predict relative abundances one step at time.
 
         Parameters
         ----------
@@ -70,12 +110,55 @@ class CompositionalLotkaVolterra:
                      of -1.
         """
         if u is None:
-            u = np.zeros((x.shape[0], 1))
-        x0 = estimate_initial_conditions(y0)
-        y_pred = predict(x0, u, times, self.A, self.g, self.B)
-        y_pred[0] = np.zeros(y_pred.shape[1])
-        return y_pred
+            u = np.zeros((p.shape[0], 1))
 
+        X, denom_ids = self.construct_log_ratios([p], self.denom_ids)
+        x = X[0]
+
+        p_pred = np.zeros((times.shape[0], x[0].size))
+        pt = p[0]
+        xt = x[0]
+        for i in range(1,times.shape[0]):
+            dt = times[i] - times[i-1]
+            xt = xt + dt*(self.g + self.A.dot(pt) + self.B.dot(u[i-1]))
+            pt = compute_rel_abun(xt, self.denom_ids).flatten()
+            p_pred[i] = pt
+        return p_pred
+
+
+    def predict_one_step(self, p, times, u = None):
+        """Predict relative abundances one step at time.
+
+        Parameters
+        ----------
+            y0     : the initial observation, a D-dim numpy array
+            times  : a T_x by 1 numpy array of sample times
+            u      : a T_x by P numpy array of external perturbations
+
+        Returns
+        -------
+            y_pred : a T_x by D numpy array of predicted relative
+                     abundances. Since we cannot predict initial
+                     conditions, the first entry is set to the array
+                     of -1.
+        """
+        X, denom_ids = self.construct_log_ratios([p], self.denom_ids)
+        x = X[0]
+
+        if u is None:
+            u = np.zeros((x.shape[0], 1))
+
+        p_pred = np.zeros((times.shape[0], x[0].size))
+        pt = p[0]
+        xt = x[0]
+        for i in range(1,times.shape[0]):
+            dt = times[i] - times[i-1]
+            xt = x[i-1] + dt*(g + A.dot(p[i-1]) + B.dot(u[i-1]))
+            pt = compute_rel_abun(xt, denom_ids).flatten()
+            p_pred[i] = pt
+            
+        return y_pred
+   
 
     def get_params(self):
         A = np.copy(self.A)
@@ -101,10 +184,7 @@ def estimate_initial_conditions(y0):
     return x0
 
 
-
-def elastic_net_clv(X, U, T, Q_inv, alpha, r_A, r_g, r_B,  tol=1e-3, verbose=False, max_iter=100000):
-    """Estimate parameters of compositional Lotka Volterra using elastic net regularization.
-    """
+def elastic_net_clv(X, P, U, T, Q_inv, r_A, r_g, r_B, alpha=1, tol=1e-3, verbose=False, max_iter=100000):
 
     def gradient(AgB, x_stacked, pgu_stacked):
         f = x_stacked - AgB.dot(pgu_stacked.T).T
@@ -155,16 +235,16 @@ def elastic_net_clv(X, U, T, Q_inv, alpha, r_A, r_g, r_B,  tol=1e-3, verbose=Fal
 
         return -obj
 
-    def stack_observations(X, U, T):
+
+    def stack_observations(X, P, U, T):
         # number of observations by xDim
         x_stacked = None
         # number of observations by yDim + 1 + uDim
         pgu_stacked = None
-        for x, u, times in zip(X, U, T):
+        for x, p, u, times in zip(X, P, U, T):
             for t in range(1, times.size):
                 dt = times[t] - times[t-1]
-                zt0 = np.concatenate((x[t-1], np.array([0])))
-                pt0 = np.exp(zt0 - logsumexp(zt0))
+                pt0 = p[t-1]
                 gt0 = np.ones(1)
                 ut0 = u[t-1]
                 pgu = np.concatenate((pt0, gt0, ut0))
@@ -179,16 +259,12 @@ def elastic_net_clv(X, U, T, Q_inv, alpha, r_A, r_g, r_B,  tol=1e-3, verbose=Fal
 
         return x_stacked, pgu_stacked
 
-
-    # assert 0 < r_A and r_A < 1
-    # assert 0 < r_g and r_g < 1
-    # assert 0 < r_B and r_B < 1
     xDim = X[0].shape[1]
-    yDim = xDim + 1
+    yDim = xDim
     uDim = U[0].shape[1]
     AgB = np.zeros(( xDim, yDim + 1 + uDim ))
 
-    x_stacked, pgu_stacked = stack_observations(X, U, T)
+    x_stacked, pgu_stacked = stack_observations(X, P, U, T)
     prv_obj = np.inf
     obj = objective(AgB, x_stacked, pgu_stacked)
 
@@ -239,14 +315,13 @@ def elastic_net_clv(X, U, T, Q_inv, alpha, r_A, r_g, r_B,  tol=1e-3, verbose=Fal
         obj = objective(AgB, x_stacked, pgu_stacked)
         it += 1
 
-        if verbose:
+        if verbose:# and it % 100 == 0:
             print("\t", it, obj)
 
         if it > max_iter:
             print("Warning: maximum number of iterations ({}) reached".format(max_iter), file=sys.stderr)
             break
 
-    #print("\t", it, obj)
     A = AgB[:,:yDim]
     g = AgB[:,yDim:(yDim+1)].flatten()
     B = AgB[:,(yDim+1):]
@@ -254,22 +329,22 @@ def elastic_net_clv(X, U, T, Q_inv, alpha, r_A, r_g, r_B,  tol=1e-3, verbose=Fal
     return A, g, B
 
 
-def estimate_elastic_net_regularizers_cv(X, Y, U, T, folds=10, verbose=False):
+
+def estimate_elastic_net_regularizers_cv(X, P, U, T, denom_ids, folds=10, verbose=False):
     if len(X) == 1:
         print("Error: cannot estimate regularization parameters from single sample", file=sys.stderr)
         exit(1)
     elif len(X) < 10:
         folds = len(X)
     
-    #ratio = [0, 0.1, 0.5, 0.7, 0.9]
-    rs = [0.1, 0.5, 0.9]
-    alphas = [0.1, 1, 10]
+    rs = [0.1, 0.5, 0.90, .95, 1]
+    alphas = [0.1, 0.5, 1, 10]
     alpha_rA_rg_rB = []
+
     for alpha in alphas:
-        for r_A in rs:
-            for r_g in rs:
-                for r_B in rs:
-                    alpha_rA_rg_rB.append( (alpha, r_A, r_g, r_B ) )
+        for r_Ag in rs:
+            for r_B in rs:
+                alpha_rA_rg_rB.append((alpha, r_Ag, r_Ag, r_B))
     
     np.set_printoptions(suppress=True)
     best_r = 0
@@ -280,30 +355,30 @@ def estimate_elastic_net_regularizers_cv(X, Y, U, T, folds=10, verbose=False):
         sqr_err = 0
         for fold in range(folds):
             train_X = []
-            train_Y = []
+            train_P = []
             train_U = []
             train_T = []
 
             test_X = []
-            test_Y = []
+            test_P = []
             test_U = []
             test_T = []
             for i in range(len(X)):
                 if i % folds == fold:
                     test_X.append(X[i])
-                    test_Y.append(Y[i])
+                    test_P.append(P[i])
                     test_U.append(U[i])
                     test_T.append(T[i])
 
                 else:
                     train_X.append(X[i])
-                    train_Y.append(Y[i])
+                    train_P.append(P[i])
                     train_U.append(U[i])
                     train_T.append(T[i])
 
             Q_inv = np.eye(train_X[0].shape[1])
-            A, g, B = elastic_net_clv(train_X, train_U, train_T, Q_inv, alpha, r_A, r_g, r_B, tol=1)
-            sqr_err += compute_prediction_error(test_X, test_Y, test_U, test_T, A, g, B)
+            A, g, B = elastic_net_clv(train_X, train_P, train_U, train_T, Q_inv, alpha, r_A, r_g, r_B, tol=0.01)
+            sqr_err += compute_prediction_error(test_X, test_P, test_U, test_T, A, g, B, denom_ids)
 
         if sqr_err < best_sqr_err:
             best_r = (alpha, r_A, r_g, r_B)
@@ -313,28 +388,45 @@ def estimate_elastic_net_regularizers_cv(X, Y, U, T, folds=10, verbose=False):
     return best_r
 
 
-def predict(x0, u, times, A, g, B):
-    xt = x0
-    zt  = np.concatenate((xt, np.array([0])))
-    pt  = np.exp(zt - logsumexp(zt))
-    y_pred = np.zeros((times.shape[0], x0.size+1))
+def compute_rel_abun(x, denom_ids):
+    if x.ndim == 1:
+        x = np.expand_dims(x, axis=0)
+    alt_denom = [i for i in range(x.shape[1]) if i not in denom_ids]
+    x_d1 = np.hstack( (x[:,denom_ids], np.zeros((x.shape[0], 1))) )
+    x_d2 = np.hstack( (x[:,alt_denom], np.zeros((x.shape[0], 1))) )
+    p = np.zeros(x.shape)
+    p[:,denom_ids] = np.exp(x[:,denom_ids] - logsumexp(x_d1,axis=1,keepdims=True))
+    p[:,alt_denom] = np.exp(x[:,alt_denom] - logsumexp(x_d2,axis=1,keepdims=True))
+    p /= p.sum()
+    #assert np.allclose(p.sum(), 1), p.sum()
+    return p
+
+
+def predict(x, p, u, times, A, g, B, denom_ids):
+    """One step prediction.
+    """
+    p_pred = np.zeros((times.shape[0], x[0].size))
+    pt = p[0]
+    xt = x[0]
     for i in range(1,times.shape[0]):
         dt = times[i] - times[i-1]
-        xt = xt + dt*(g + A.dot(pt) + B.dot(u[i-1]))
-        zt  = np.concatenate((xt, np.array([0])))
-        pt  = np.exp(zt - logsumexp(zt))
-        y_pred[i] = pt        
-    return y_pred
+        xt = x[i-1] + dt*(g + A.dot(p[i-1]) + B.dot(u[i-1]))
+        pt = compute_rel_abun(xt, denom_ids).flatten()
+        p_pred[i] = pt
+    return p_pred
 
 
-def compute_prediction_error(X, Y, U, T, A, g, B):
-    def compute_total_square_error(y, y_pred):
+def compute_prediction_error(X, P, U, T, A, g, B, denom_ids):
+    def compute_err(p, p_pred):
+        """Define error to be 1-r2 per taxon.
+        """
         err = 0
-        for yt, ypt in zip(y[1:], y_pred[1:]):
-            err += np.square(yt/yt.sum() - ypt).sum()
-        return err
+        ntaxa = p.shape[1]
+        for i in range(ntaxa):
+            err += 1-np.square(linregress(p[1:,i],p_pred[1:,i])[2])
+        return err/ntaxa
     err = 0
-    for x, y, u, t in zip(X, Y, U, T):
-        y_pred = predict(x[0], u, t, A, g, B)
-        err += compute_total_square_error(y, y_pred)
-    return err
+    for x, p, u, t in zip(X, P, U, T):
+        p_pred = predict(x, p, u, t, A, g, B, denom_ids)
+        err += compute_err(p, p_pred)
+    return err/len(X)
