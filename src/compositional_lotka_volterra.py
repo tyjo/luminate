@@ -153,11 +153,11 @@ class CompositionalLotkaVolterra:
         xt = x[0]
         for i in range(1,times.shape[0]):
             dt = times[i] - times[i-1]
-            xt = x[i-1] + dt*(g + A.dot(p[i-1]) + B.dot(u[i-1]))
+            xt = x[i-1] + dt*(self.g + self.A.dot(p[i-1]) + self.B.dot(u[i-1]))
             pt = compute_rel_abun(xt, denom_ids).flatten()
             p_pred[i] = pt
             
-        return y_pred
+        return p_pred
    
 
     def get_params(self):
