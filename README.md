@@ -102,11 +102,8 @@ This outputs several files
 	A : the matrix of taxa interactions
 	g : relative growth rate vector
 	B : effects of external perturbation
-	dimensions : the names of each dimension (taxon) in A and g
-	effect-dimensions : the names of each column on B
 ```
-
-Bootstrap one-sided p-values are in `A_pval`, `g_pval`, `B_pval`. These are the estimated probabilities that the nonzero coefficients estimated on the training data have the same sign. For example, if `A_{ij} = 1` the computed p-value is `Prob(A_{ij} > 0)`. Note, the minimum possible p-value is `1/b` so p-values below this threshold will appear as zeros.
+The rows of each matrix, `A, g, B`, are coordinates under the additive log ratio transformation. Bootstrap one-sided p-values are in `A_pval`, `g_pval`, `B_pval`. These are the estimated probabilities that the nonzero coefficients estimated on the training data have the same sign. For example, if `A_{ij} = 1` the computed p-value is `Prob(A_{ij} > 0)`. Note, the minimum possible p-value is `1/b` so p-values below this threshold will appear as zeros.
 
 
 ### Predict (Experimental)
@@ -127,7 +124,7 @@ Plotting the results:
 
 ```
 python main.py plot \
-               datasets/bucci2016mdsine/cdiff-counts-est.csv \
+               datasets/bucci2016mdsine/cdiff-counts-est-pred.csv \
                -e datasets/bucci2016mdsine/cdiff-events.csv \
                -i datasets/bucci2016mdsine \
                -o datasets/bucci2016mdsine
@@ -180,3 +177,6 @@ optional arguments:
   -s, --one-step        Perform one-step prediction instead of prediction from
                         initial conditions.
 ```
+
+## Code to Replicate Simulation Experiments
+The directory ```experiments``` contains simulation code to regenerate simulated datasets used for evaluation in the manuscript. The script ```simulate_glv_from_data.py``` generates the simulations used the main model comparison. The script ```simulate_glv_with_zeros.py``` generates the simulations used in the biological zero evaluation. Simulated datasets are output to ```experiments/datasets```.
