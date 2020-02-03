@@ -7,45 +7,10 @@ from scipy.misc import logsumexp
 from sys import argv
 
 import src.util as util
-from src.compositional_lotka_volterra import CompositionalLotkaVolterra
+from src.compositional_lotka_volterra import CompositionalLotkaVolterra, choose_denom
 from src.noisy_vmlds import NoisyVMLDS
 from src.find_stable_subset import find_stable_subset
 
-
-def choose_denom(Y, otu_table):
-    """Find a suitable denominator for the additive log
-    ratio transformation (used for NoisyvMLDS).
-    """
-    ntaxa = Y[0].shape[1]
-    avg_nonzero = np.zeros(ntaxa)
-    avg_abun = np.zeros(ntaxa)
-    avg_var = np.zeros(ntaxa)
-    for y in Y:
-        avg_y = np.sum(y!=0,axis=0) / y.shape[0]
-        avg_nonzero += avg_y
-
-        y_norm = y / y.sum(axis=1,keepdims=True)
-        for d in range(ntaxa):
-            avg_var[d] += np.var(y_norm[:,d])
-        avg_abun += y_norm.sum(axis=0)/y.shape[0]
-    avg_nonzero /= len(Y)
-    avg_abun /= len(Y)
-    avg_var /= len(Y)
-
-    otu_table = np.loadtxt(otu_table, delimiter=",", dtype=str)
-    taxon_names = otu_table[2:,0]
-
-    low_var_idxes = np.argsort(avg_var)
-    low_var_idx = None
-    for idx in low_var_idxes:
-        if avg_nonzero[idx] > 0.8:
-            low_var_idx = idx
-            break
-
-    taxon = taxon_names[low_var_idx]
-    row = low_var_idx
-    avg = avg_nonzero[low_var_idx]
-    return row, taxon
 
 
 def train(Y, U, T, event_names, denom, input_dir, output_dir, otu_table, bootstrap_replicates):
@@ -65,26 +30,40 @@ def train(Y, U, T, event_names, denom, input_dir, output_dir, otu_table, bootstr
 
 
     else:
-        print("Estimating relative abundances...", file=sys.stderr)
-        vmlds = NoisyVMLDS(Y, U, T, denom)
-        vmlds.optimize(verbose=True)
-        P = vmlds.get_relative_abundances()
-        pkl.dump(P, open(output_dir + "/P.pkl", "wb"))
+        # print("Estimating relative abundances...", file=sys.stderr)
+        # vmlds = NoisyVMLDS(Y, U, T, denom)
+        # vmlds.optimize(verbose=True)
+        # P = vmlds.get_relative_abundances()
+        # pkl.dump(P, open(output_dir + "/P.pkl", "wb"))
+        P = estimate(Y, U, T, IDs, denom, otu_table, output_dir)
 
 
     print("Running parameter estimation...")
-    clv = CompositionalLotkaVolterra(P, T, U)
-    clv.train(verbose=True)
+    clv = CompositionalLotkaVolterra(P, T, U, denom=denom)
+    clv.train(verbose=False)
     A, g, B = clv.get_params()
     print("Saving parameters to", output_dir)
-    np.savetxt(output_dir + "/A", A)
-    np.savetxt(output_dir + "/g", g)
-    np.savetxt(output_dir + "/B", B)
-
     otu_table = np.loadtxt(otu_table, delimiter=",", dtype=str)
     taxon_names = otu_table[2:,0].tolist()
-    np.savetxt(output_dir + "/dimensions", taxon_names, fmt="%s")
-    np.savetxt(output_dir + "/effect-dimensions", event_names, fmt="%s")
+    y_dim_names = taxon_names
+    denom_name = taxon_names[denom]
+    x_dim_names = np.array(["ALR/Rel-Abun"] + [taxon + "/" + denom_name for taxon in taxon_names if taxon != denom_name])
+    x_dim_names = np.expand_dims(x_dim_names, axis=1)
+
+    A_save = A.astype(str)
+    A_save = np.vstack((y_dim_names, A_save))
+    A_save = np.hstack((x_dim_names, A_save))
+
+    g_save = np.expand_dims(g, axis=1)
+    g_save = np.hstack((x_dim_names[1:], g_save.astype(str)))
+
+    event_names = np.expand_dims(event_names, axis=1)
+    B_save = np.vstack((event_names, B.astype(str)))
+    x_dim_names = np.concatenate((np.array([["ALR/Perturb"]]), x_dim_names[1:]))
+    B_save = np.hstack((x_dim_names, B_save))
+    np.savetxt(output_dir + "/A", A_save, fmt="%s", delimiter="\t")
+    np.savetxt(output_dir + "/g", g_save, fmt="%s", delimiter="\t")
+    np.savetxt(output_dir + "/B", B_save, fmt="%s", delimiter="\t")
 
     # bootstrap resampling
     if bootstrap_replicates > 0:
@@ -111,7 +90,7 @@ def train(Y, U, T, event_names, denom, input_dir, output_dir, otu_table, bootstr
                 U_bs.append(np.copy(U[idx]))
                 T_bs.append(np.copy(T[idx]))
 
-            clv_bs = CompositionalLotkaVolterra(P_bs, T_bs, U_bs)
+            clv_bs = CompositionalLotkaVolterra(P_bs, T_bs, U_bs, denom=clv.denom)
             alpha, r_A, r_g, r_B = clv.get_regularizers()
             clv_bs.set_regularizers(alpha, r_A, r_g, r_B)
             clv_bs.train(verbose=False)
@@ -181,6 +160,7 @@ def estimate(Y, U, T, IDs, denom, otu_table, output_dir):
 
     W = model.get_posterior_nonzero_probs()
     util.write_table(IDs, W, T, otu_table, output_dir, postfix="nonzero-posterior-probs")
+    return P_pred
 
 
 def plot_trajectories(IDs, Y, U, T, effect_names, taxon_names, output_dir, outfile):
@@ -296,16 +276,19 @@ if __name__ == "__main__":
     IDs, Y, U, T, event_names = util.load_observations(otu_table, event_table)
 
     if cmd == "train":    
-        # find an appropriate denominator for the denoising step
-        denom, taxon = choose_denom(Y, otu_table)
+        # find an appropriate denominator
+        denom = choose_denom(Y)#, otu_table)
         train(Y, U, T, event_names, denom, input_dir, output_dir, otu_table, bootstrap_replicates)
     elif cmd == "predict":
         if input_dir is not None:
             try:
                 print("Loading model parameters from", input_dir, file=sys.stderr)
-                A = np.loadtxt(input_dir + "/A")
-                g = np.loadtxt(input_dir + "/g")
-                B = np.loadtxt(input_dir + "/B")
+                A = np.loadtxt(input_dir + "/A", dtype=str, delimiter="\t")
+                A = A[1:,1:].astype(float)
+                g = np.loadtxt(input_dir + "/g", dtype=str, delimiter="\t")
+                g = g[:,1].astype(float)
+                B = np.loadtxt(input_dir + "/B", dtype=str, delimiter="\t")
+                B = B[1:,1:].astype(float)
                 if B.ndim == 1:
                     B = np.expand_dims(B,axis=1)
             except OSError:
@@ -318,7 +301,7 @@ if __name__ == "__main__":
         predict(Y, U, T, IDs, A, g, B, otu_table, output_dir, one_step)
     elif cmd == "estimate":
         # find an appropriate denominator for the denoising step
-        denom, taxon = choose_denom(Y, otu_table)
+        denom = choose_denom(Y)
         estimate(Y, U, T, IDs, denom, otu_table, output_dir)
 
     elif cmd == "plot":
