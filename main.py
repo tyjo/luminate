@@ -9,7 +9,6 @@ from sys import argv
 import src.util as util
 from src.compositional_lotka_volterra import CompositionalLotkaVolterra, choose_denom
 from src.noisy_vmlds import NoisyVMLDS
-from src.find_stable_subset import find_stable_subset
 
 
 
@@ -228,7 +227,8 @@ def plot_trajectories(IDs, Y, U, T, effect_names, taxon_names, output_dir, outfi
         denom = Y[i].sum(axis=1)
         denom[denom == 0] = 1
 
-        plot_effects(ax1, U[i], T[i], effect_names, "Effects")
+        if effect_names:
+            plot_effects(ax1, U[i], T[i], effect_names, "Effects")
         plot_bar(ax2, (Y[i].T / denom).T, T[i], top19_ids, remaining_ids)
 
 
@@ -248,7 +248,7 @@ if __name__ == "__main__":
                                      help="Filepath to OTU table csv.")
     parser.add_argument("-e", "--events", type=str, default="",
                                           help="Filepath to table of external events.")
-    parser.add_argument("-o", "--outdir", type=str, default="",
+    parser.add_argument("-o", "--outdir", type=str, default=None,
                                           help="Specify output directory to store results. " + \
                                                "Default is current directory.")
     parser.add_argument("-i", "--indir", type=str, default=None,
@@ -269,7 +269,7 @@ if __name__ == "__main__":
     otu_table = args.otu_table
     event_table = args.events
     input_dir = args.indir.strip("/") if args.indir is not None else None
-    output_dir = args.outdir.strip("/") if args.outdir is not None else None
+    output_dir = args.outdir.strip("/") if args.outdir is not None else "./"
     bootstrap_replicates = args.bootstrap
     one_step = args.one_step
 
