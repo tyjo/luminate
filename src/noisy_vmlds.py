@@ -123,6 +123,7 @@ class NoisyVMLDS:
                 print("Error: sequence has 1 or fewer time points", file=sys.stderr)
                 exit(1)
 
+
         self.Y = self.swap_last_taxon(Y, denom) # last taxon is denominator
         self.V = self.parse_perturbations(U)
         self.T = T
@@ -200,15 +201,22 @@ class NoisyVMLDS:
         P = []
         if X is None:
             X = self.X
+            Y = self.Y
+            denom = self.denom
 
-        for x in X:
+        for x,y in zip(X, Y):
             x1 = np.hstack((x, np.zeros((x.shape[0], 1))))
             p = np.exp(x1 - logsumexp(x1, axis=1, keepdims=True))
 
+            # taxa without any observed counts (zero rows)
+            # should remain fixed at 0.
+            p[:,y.sum(axis=0) == 0] = 0
+            p /= p.sum(axis=1, keepdims=True)
+
             # place in same order as original input
             tmp = np.copy(p[:,-1])
-            p[:,-1] = np.copy(p[:,self.denom])
-            p[:,self.denom] = tmp
+            p[:,-1] = np.copy(p[:,denom])
+            p[:,denom] = tmp
             P.append(p)
         return P
 
@@ -431,13 +439,13 @@ class NoisyVMLDS:
             x = compute_blk_tridiag_inv_b(S,D,w_gamma_inv_z)
             self.X[i] = x
 
+
             if self.compute_elbo() < prv:
                 self.X[i] = x_prv
 
                 # if np.max(np.abs(self.X[i])) > 20:
                 #     print("bad state space iteration", file=sys.stderr)
                 #     exit(1)
-
 
     def update_Z(self):
         """Compute the optimal posterior means.
@@ -570,7 +578,6 @@ class NoisyVMLDS:
             alpha = np.zeros(w.shape)
  
             np.seterr(divide="ignore") # zeros are appropriately handled here
-            #p = np.concatenate((np.log(w[0,:-1]) + z[0] + var_Z, [np.log(w[0,-1])]))
             p = np.concatenate((z[0] + var_Z, [0]))
             p = np.tile(p, ntaxa).reshape(ntaxa, ntaxa)
             w0 = np.tile(np.log(w[0]), ntaxa).reshape(ntaxa, ntaxa)
