@@ -11,30 +11,42 @@ from src.compositional_lotka_volterra import CompositionalLotkaVolterra, choose_
 from src.noisy_vmlds import NoisyVMLDS
 
 
+def dirichlet_multinomial(Y):
+    ntaxa = Y[0].shape[1]
+    prior = np.ones(ntaxa)
+    P_dm = []
+    for y in Y:
+        p = (y + prior) / (y + prior).sum(axis=1, keepdims=True)
+        P_dm.append(p)
+    return P_dm
 
-def train(Y, U, T, event_names, denom, input_dir, output_dir, otu_table, bootstrap_replicates):
+
+def train(Y, U, T, event_names, denom, input_dir, output_dir, otu_table, bootstrap_replicates, use_pseudo_count):
     """Train cLV.
     """
-    if input_dir is not None:
-        if not os.path.exists(input_dir):
-            print("Directory", input_dir, "does not exists", file=sys.stderr)
-        try:
-            P = pkl.load(open(input_dir + "/P.pkl", "rb"))
-        except FileNotFoundError:
+    if not use_pseudo_count:
+        if input_dir is not None:
+            if not os.path.exists(input_dir):
+                print("Directory", input_dir, "does not exists", file=sys.stderr)
+            try:
+                P = pkl.load(open(input_dir + "/P.pkl", "rb"))
+            except FileNotFoundError:
+                print("Estimating relative abundances...", file=sys.stderr)
+                vmlds = NoisyVMLDS(Y, U, T, denom)
+                vmlds.optimize(verbose=True)
+                P = vmlds.get_relative_abundances()
+                pkl.dump(P, open(output_dir + "/P.pkl", "wb"))
+
+
+        else:
             print("Estimating relative abundances...", file=sys.stderr)
             vmlds = NoisyVMLDS(Y, U, T, denom)
             vmlds.optimize(verbose=True)
             P = vmlds.get_relative_abundances()
             pkl.dump(P, open(output_dir + "/P.pkl", "wb"))
 
-
     else:
-        # print("Estimating relative abundances...", file=sys.stderr)
-        # vmlds = NoisyVMLDS(Y, U, T, denom)
-        # vmlds.optimize(verbose=True)
-        # P = vmlds.get_relative_abundances()
-        # pkl.dump(P, open(output_dir + "/P.pkl", "wb"))
-        P = estimate(Y, U, T, IDs, denom, otu_table, output_dir)
+        P = dirichlet_multinomial(Y)
 
 
     print("Running parameter estimation...")
@@ -263,6 +275,9 @@ if __name__ == "__main__":
     parser.add_argument("-s", "--one-step", default=False, action="store_true",
                                              help="Perform one-step prediction instead of prediction " + \
                                                   "from initial conditions.")
+    parser.add_argument("-p", "--use-pseudo-count", default=False, action="store_true",
+                                             help="Estimate relative abundances using pseudo-counts instead " + \
+                                                  "of denoising step.")
 
     args = parser.parse_args(argv[1:])
     cmd = args.command
@@ -272,13 +287,14 @@ if __name__ == "__main__":
     output_dir = args.outdir.strip("/") if args.outdir is not None else "./"
     bootstrap_replicates = args.bootstrap
     one_step = args.one_step
+    use_pseudo_count = args.use_pseudo_count
 
     IDs, Y, U, T, event_names = util.load_observations(otu_table, event_table)
 
     if cmd == "train":    
         # find an appropriate denominator
-        denom = choose_denom(Y)#, otu_table)
-        train(Y, U, T, event_names, denom, input_dir, output_dir, otu_table, bootstrap_replicates)
+        denom = choose_denom(Y)
+        train(Y, U, T, event_names, denom, input_dir, output_dir, otu_table, bootstrap_replicates, use_pseudo_count)
     elif cmd == "predict":
         if input_dir is not None:
             try:

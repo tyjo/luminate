@@ -62,6 +62,8 @@ def choose_denom(P):
 
     return min_idx
 
+
+
 def construct_alr(P, denom):
     """Compute the additive log ratio transformation with a given
     choice of denominator. Assumes zeros have been replaced with
