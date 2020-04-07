@@ -158,6 +158,9 @@ class NoisyVMLDS:
         # transitions for zeros
         self.A, self.A_init = self.initialize_A(Y)
 
+        # variational posterior observation variance
+        self.post_gamma2 = np.ones(self.latent_dim)
+
         # variance of X, block precision and block covariance
         self.lambda_AA = [ [] for y in Y ] # diagonal blocks of the precision matrix
         self.lambda_BB = [ [] for y in Y ] # upper diagonal blocks of the precision matrix
@@ -188,7 +191,8 @@ class NoisyVMLDS:
             Y = self.Y
 
         denom = self.denom
-        var_Z = np.ones(self.gamma2.shape)
+        #var_Z = np.ones(self.gamma2.shape)
+        var_Z = self.post_gamma2
         for x,y in zip(X, Y):
             x1 = np.hstack((x + 0.5*var_Z, np.zeros((x.shape[0], 1))))
             p = np.exp(x1 - logsumexp(x1, axis=1, keepdims=True))
@@ -289,24 +293,11 @@ class NoisyVMLDS:
         converged = False
 
         while not converged:
-        #while np.abs(prv - nxt) > 0.1:
-            # if verbose:
-            #     # print("\tit:", it, "delta:", np.abs(nxt - prv))
-            #     print("\tit:", it, "delta:", np.max((x_diff, z_diff)))
-
             X_prv = [np.copy(x) for x in self.X]
             Z_prv = [np.copy(z) for z in self.Z]
-            prv_inner = -np.inf
-            nxt_inner = nxt
-            it_inner = 0
-            while np.abs(prv_inner - nxt_inner) > 1:
-                self.update_Z()
-                self.update_X()
-                self.update_W()
-                prv_inner = nxt_inner
-                nxt_inner = self.compute_elbo()
-                it_inner += 1
-
+            self.update_Z()
+            self.update_X()
+            self.update_W()
             self.update_A()
             if it < 2:
                 self.update_sigmas()
@@ -384,7 +375,7 @@ class NoisyVMLDS:
             # observations
             y = self.Y[i]
             np.seterr(divide="ignore") # log of 0 is handled appropriately here
-            p = np.hstack([np.log(w[:,:lat_dim]) + z + var_Z, np.expand_dims(np.log(w[:,lat_dim]),axis=1)])
+            p = np.hstack([np.log(w[:,:lat_dim]) + z + self.post_gamma2, np.expand_dims(np.log(w[:,lat_dim]),axis=1)])
             np.seterr(divide="warn")
             p = np.exp(p - logsumexp(p,axis=1,keepdims=True))
             p /= p.sum(axis=1,keepdims=True)
@@ -547,7 +538,8 @@ class NoisyVMLDS:
             tpts = y.shape[0]
             gamma_inv_AA = self.gamma_inv_AA[i]
             #var_Z = self.gamma2
-            var_Z = np.ones(self.gamma2.shape)
+            #var_Z = np.ones(self.gamma2.shape)
+            var_Z = self.post_gamma2
             z = minimize(z, w, x, y, gamma_inv_AA, var_Z, verbose=False)
             self.Z[i] = z
 
