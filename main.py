@@ -3,7 +3,7 @@ import os
 import pickle as pkl
 import sys
 from argparse import ArgumentParser
-from scipy.misc import logsumexp
+from scipy.special import logsumexp
 from sys import argv
 
 import src.util as util
