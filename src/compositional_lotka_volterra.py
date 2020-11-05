@@ -147,10 +147,6 @@ class CompositionalLotkaVolterra:
     def train(self, verbose=False, folds=10):
         """Estimate regularization parameters and CLV model parameters.
         """
-        self.alpha = 0.5
-        self.r_A = 0.5
-        self.r_g = 0.5
-        self.r_B = 0.5
         if self.alpha is None or self.r_A is None or self.r_g is None or self.r_B is None:
             if verbose:
                 print("Estimating regularizers...")
