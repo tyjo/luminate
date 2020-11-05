@@ -121,6 +121,11 @@ class NoisyVMLDS:
             if t.size <= 1:
                 print("Error: sequence has 1 or fewer time points", file=sys.stderr)
                 exit(1)
+        for y in Y:
+            totals = y.sum(axis=1)
+            if np.any(np.allclose(totals, 1)):
+                print("Error: attempting to run estimation step on relative abundances (read counts are required)", file=sys.stderr)
+                exit(1)
 
         self.Y = self.swap_last_taxon(Y, denom) # last taxon is denominator
         self.V = self.parse_perturbations(U)
@@ -846,13 +851,7 @@ class NoisyVMLDS:
         sigma2 = v.dot(np.diag(w)).dot(v.T)
         self.sigma2 = sigma2
 
-        if np.any(sigma2_p != 0):
-            # w,v = np.linalg.eig(sigma2_p)
-            # v = np.real(v)
-            # w = np.real(w)
-            # w = np.clip(w, 1e-3, 5)
-            sigma2_p = np.clip(sigma2, 1e-3, 5)
-            self.sigma2_p = sigma2_p*np.eye(self.latent_dim)
+        self.sigma2_p = np.clip(sigma2_p, 1e-3, 5)*np.eye(self.latent_dim)
 
 
     def update_gamma(self):

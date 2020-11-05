@@ -68,13 +68,15 @@ def train(Y, U, T, event_names, denom, input_dir, output_dir, otu_table, bootstr
     g_save = np.expand_dims(g, axis=1)
     g_save = np.hstack((x_dim_names[1:], g_save.astype(str)))
 
-    event_names = np.expand_dims(event_names, axis=1)
-    B_save = np.vstack((event_names, B.astype(str)))
-    x_dim_names = np.concatenate((np.array([["ALR/Perturb"]]), x_dim_names[1:]))
-    B_save = np.hstack((x_dim_names, B_save))
     np.savetxt(output_dir + "/A", A_save, fmt="%s", delimiter="\t")
     np.savetxt(output_dir + "/g", g_save, fmt="%s", delimiter="\t")
-    np.savetxt(output_dir + "/B", B_save, fmt="%s", delimiter="\t")
+
+    if event_names is not None:
+        event_names = np.expand_dims(event_names, axis=1)
+        B_save = np.vstack((event_names, B.astype(str)))
+        x_dim_names = np.concatenate((np.array([["ALR/Perturb"]]), x_dim_names[1:]))
+        B_save = np.hstack((x_dim_names, B_save))
+        np.savetxt(output_dir + "/B", B_save, fmt="%s", delimiter="\t")
 
     # bootstrap resampling
     if bootstrap_replicates > 0:
@@ -125,7 +127,9 @@ def train(Y, U, T, event_names, denom, input_dir, output_dir, otu_table, bootstr
 
         np.savetxt(output_dir + "/A_pval", 1 - A_prob, fmt="%.4f")
         np.savetxt(output_dir + "/g_pval", 1 - g_prob, fmt="%.4f")
-        np.savetxt(output_dir + "/B_pval", 1 - B_prob, fmt="%.4f")
+
+        if event_names is not None:
+            np.savetxt(output_dir + "/B_pval", 1 - B_prob, fmt="%.4f")
 
 
 def predict(Y, U, T, IDs, A, g, B, otu_table, output_dir, one_step=False):
@@ -174,7 +178,7 @@ def estimate(Y, U, T, IDs, denom, otu_table, output_dir):
     return P_pred
 
 
-def plot_trajectories(IDs, Y, U, T, effect_names, taxon_names, output_dir, outfile):
+def plot_trajectories(IDs, Y, U, T, effect_names, taxon_names, output_dir, outfile, output_type="pdf"):
     import matplotlib.pyplot as plt
     import matplotlib.gridspec as gridspec
 
@@ -202,6 +206,7 @@ def plot_trajectories(IDs, Y, U, T, effect_names, taxon_names, output_dir, outfi
         colors = [cm(i) for i in range(20)]
         widths = np.concatenate((time[1:] - time[:-1], [1]))
         widths[widths > 1] = 1
+        widths[widths < 0.5] = 0.5
         widths -= 1e-1
         u = np.copy(u)
         u[u > 0] = 1
@@ -247,7 +252,7 @@ def plot_trajectories(IDs, Y, U, T, effect_names, taxon_names, output_dir, outfi
         outfile = os.path.splitext(outfile)[0]
         gs.tight_layout(fig, h_pad=3.5)
 
-        plt.savefig(output_dir + "/" + outfile + "-{}.pdf".format(IDs[i]))
+        plt.savefig(output_dir + "/" + outfile + "-{}.{}".format(IDs[i], output_type))
         plt.close()
 
 
@@ -278,6 +283,7 @@ if __name__ == "__main__":
     parser.add_argument("-p", "--use-pseudo-count", default=False, action="store_true",
                                              help="Estimate relative abundances using pseudo-counts instead " + \
                                                   "of denoising step.")
+    parser.add_argument("-f", "--plot-output-format", type=str, default="pdf", help="Save plots as either pdf or png.")
 
     args = parser.parse_args(argv[1:])
     cmd = args.command
@@ -288,6 +294,10 @@ if __name__ == "__main__":
     bootstrap_replicates = args.bootstrap
     one_step = args.one_step
     use_pseudo_count = args.use_pseudo_count
+    plot_output_format = args.plot_output_format
+    if plot_output_format not in ["pdf", "png"]:
+        print("Error: plot output must either be pdf or png", file=sys.stderr)
+        exit(1)
 
     IDs, Y, U, T, event_names = util.load_observations(otu_table, event_table)
 
@@ -318,11 +328,25 @@ if __name__ == "__main__":
     elif cmd == "estimate":
         # find an appropriate denominator for the denoising step
         denom = choose_denom(Y)
+        # check zeros
+        frac_zero = np.zeros(Y[0].shape[1])
+        total_entries = 0
+        for y in Y:
+            frac_zero += (y == 0).sum(axis=0)
+            total_entries += y.shape[0]
+        frac_zero /= total_entries
+        for i,f in enumerate(frac_zero):
+            if f == 1.0:
+                print("Warning: row {} in OTU table is all zeros, please remove this row".format(i+3), file=sys.stderr)
+            elif f > 0.95:
+                print("Warning: taxon in row {} is more than 95% missing, please remove this row".format(i+3), file=sys.stderr)
+            elif f > 0.9:
+                print("Warning: taxon in row {} may be too sparse (more than 90% missing)".format(i+3), file=sys.stderr)
         estimate(Y, U, T, IDs, denom, otu_table, output_dir)
 
     elif cmd == "plot":
         taxon_names = np.loadtxt(otu_table, dtype=str, delimiter=",")[2:,0]
-        plot_trajectories(IDs, Y, U, T, event_names, taxon_names, output_dir, os.path.basename(otu_table))
+        plot_trajectories(IDs, Y, U, T, event_names, taxon_names, output_dir, os.path.basename(otu_table), plot_output_format)
 
     else:
         print("unrecognized command", file=sys.stderr)

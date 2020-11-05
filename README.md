@@ -53,7 +53,7 @@ Here is an example, using the first sequence in the C. diff dataset:
 Next, we want to estimate relative abundances from sequencing counts, and save the results:
 
 ```
-python main.py estimate
+python main.py estimate \
                datasets/bucci2016mdsine/cdiff-counts.csv \
                -e datasets/bucci2016mdsine/cdiff-events.csv \
                -o datasets/bucci2016mdsine
@@ -80,9 +80,12 @@ python main.py plot \
 
 ![Estimated relative abundances](./datasets/bucci2016mdsine/cdiff-counts-est-1.png)
 
-
+#### Note on data sparsity
+The information available to reconstruct a trajectory is proportional to the amount of nonmissing (nonzero) data. For ultra-sparse taxa (>90% missing entries), there is little information its trajectory over time. We recommend filtering out such taxa as a pre-processing step. 
 
 ### Train
+**Note:** Estimates of cLV parameters with LUMINATE is considered experimental. To train model parameters using pseudo-counts instead of denoised estimates, pass the --use-pseudo-counts flag instead.
+
 Next, we want to estimate the parameters of cLV using the estimated relative abundances:
 
 ```
@@ -176,6 +179,8 @@ optional arguments:
                         (N<30).
   -s, --one-step        Perform one-step prediction instead of prediction from
                         initial conditions.
+  -p, --use-pseudo-count
+                        Estimate relative abundances using pseudo-counts instead of denoising step.
 ```
 
 ## Code to Replicate Simulation Experiments

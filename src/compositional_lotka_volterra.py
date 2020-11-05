@@ -69,13 +69,15 @@ def construct_alr(P, denom):
     choice of denominator. Assumes zeros have been replaced with
     nonzero values.
     """
+    np.seterr(all="raise")
     ALR = []
     ntaxa = P[0].shape[1]
     numer = np.array([i for i in range(ntaxa) if i != denom])
     for p in P:
         p = np.copy(p)
         p = p / p.sum(axis=1,keepdims=True)
-        p /= p.sum(axis=1, keepdims=True) 
+        p = np.clip(p, 1e-5, 1)
+
         alr = (np.log(p[:,numer]).T - np.log(p[:,denom])).T
         ALR.append(alr)
     return ALR
@@ -145,6 +147,10 @@ class CompositionalLotkaVolterra:
     def train(self, verbose=False, folds=10):
         """Estimate regularization parameters and CLV model parameters.
         """
+        self.alpha = 0.5
+        self.r_A = 0.5
+        self.r_g = 0.5
+        self.r_B = 0.5
         if self.alpha is None or self.r_A is None or self.r_g is None or self.r_B is None:
             if verbose:
                 print("Estimating regularizers...")
@@ -267,7 +273,7 @@ class CompositionalLotkaVolterra:
         return A, g, B
 
 
-def elastic_net_clv(X, P, U, T, Q_inv, alpha, r_A, r_g, r_B, tol=1e-3, verbose=False, max_iter=10000):
+def elastic_net_clv(X, P, U, T, Q_inv, alpha, r_A, r_g, r_B, tol=1e-2, verbose=False, max_iter=100000):
 
     def gradient(AgB, x_stacked, pgu_stacked):
         f = x_stacked - AgB.dot(pgu_stacked.T).T
@@ -532,7 +538,7 @@ def estimate_elastic_net_regularizers_cv(X, P, U, T, denom, folds, no_effects=Fa
                     train_T.append(T[i])
 
             Q_inv = np.eye(train_X[0].shape[1])
-            A, g, B = elastic_net_clv(train_X, train_P, train_U, train_T, Q_inv, alpha, r_A, r_g, r_B, tol=1e-3)
+            A, g, B = elastic_net_clv(train_X, train_P, train_U, train_T, Q_inv, alpha, r_A, r_g, r_B, tol=1e-1)
             sqr_err += compute_prediction_error(test_X, test_P, test_U, test_T, A, g, B, denom)
 
         if sqr_err < best_sqr_err:
@@ -626,7 +632,7 @@ def compute_rel_abun(x, denom):
         p[:,i] = tmp
     return p
 
-@timeout(5)
+
 def predict(x, p, u, times, A, g, B, denom):
     """Make predictions from initial conditions
     """
@@ -643,8 +649,7 @@ def predict(x, p, u, times, A, g, B, denom):
     for i in range(1, times.shape[0]):
         grad = grad_fn(A, g, B, u[i-1], denom)
         dt = times[i] - times[i-1]
-        ivp = solve_ivp(grad, (0,0+dt), xt, method="RK45")
-        xt = ivp.y[:,-1]
+        xt = xt + grad(1, xt)*dt
         pt = compute_rel_abun(xt, denom).flatten()
         p_pred[i] = pt
     return p_pred
