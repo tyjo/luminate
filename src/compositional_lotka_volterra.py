@@ -3,7 +3,6 @@ import sys
 from scipy.special import logsumexp
 from scipy.stats import linregress
 from scipy.integrate import RK45, solve_ivp
-from src.timeout import *
 
 def estimate_relative_abundances(Y, pseudo_count=1e-5):
     """Adds pseudo counts to avoid zeros and compute relative abundances
