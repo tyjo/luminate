@@ -306,7 +306,7 @@ if __name__ == "__main__":
         denom = choose_denom(Y)
         train(Y, U, T, event_names, denom, input_dir, output_dir, otu_table, bootstrap_replicates, use_pseudo_count)
     elif cmd == "predict":
-        if input_dir is not None:
+        if input_dir is not None and event_table != "":
             try:
                 print("Loading model parameters from", input_dir, file=sys.stderr)
                 A = np.loadtxt(input_dir + "/A", dtype=str, delimiter="\t")
@@ -319,6 +319,19 @@ if __name__ == "__main__":
                     B = np.expand_dims(B,axis=1)
             except OSError:
                 print("Unable to load parameters")
+                exit(1)
+        elif input_dir is not None:
+            try:
+                print("Loading model parameters from", input_dir, file=sys.stderr)
+                A = np.loadtxt(input_dir + "/A", dtype=str, delimiter="\t")
+                A = A[1:,1:].astype(float)
+                g = np.loadtxt(input_dir + "/g", dtype=str, delimiter="\t")
+                g = g[:,1].astype(float)
+                # if no external events are used, set this to zero
+                B = np.zeros((A.shape[0], 1))
+            except OSError:
+                print("Unable to load parameters")
+                exit(1)
         else:
             print("Please specify directory to load model parameters.", file=sys.stderr)
             print("Did you run", file=sys.stderr)
